@@ -508,7 +508,7 @@ function renderInsights(){
     const chg = +(bw[bw.length-1].kg - bw[0].kg).toFixed(1);
     const cEl=$("#bwChange");
     cEl.textContent = (chg>0?"+":"")+fmtKg(chg)+"kg";
-    cEl.style.color = chg>0?"var(--bad)":(chg<0?"var(--good)":"var(--muted)"); // gaining bw = red, losing = green (typical cut goal)
+    cEl.style.color = chg>0?"var(--good)":(chg<0?"var(--bad)":"var(--muted)"); // gaining bw = green (bulk goal), losing = red
   } else {
     clearCanvas($("#bwChart"), "Log your body weight in Settings");
     $("#bwNow").textContent="–"; $("#bwChange").textContent="–"; $("#bwChange").style.color="var(--muted)";
