@@ -65,6 +65,8 @@
   button.wide{width:100%;}
   button.sm{padding:8px 12px; font-size:14px;}
   button:disabled{opacity:.4; cursor:default;}
+  .iconbtn{background:var(--card2); border:1px solid var(--line); color:var(--muted); width:34px; height:34px; border-radius:10px; font-size:15px; padding:0; flex:none; font-weight:400;}
+  .iconbtn:active{transform:scale(.94);}
 
   .sessionBar{position:sticky; top:0; z-index:5;}
   .banner{background:linear-gradient(135deg,#23314f,#1d2536); border:1px solid #34507f; border-radius:var(--radius); padding:12px 14px; margin-bottom:14px;}
@@ -141,11 +143,19 @@
       <div id="bwHistory" style="margin-top:6px"></div>
     </div>
 
-    <h2 class="section">Exercises</h2>
+    <h2 class="section">Default exercises</h2>
     <div class="card">
       <div id="exEditList"></div>
       <button class="ghost wide sm" id="btnAddEx" style="margin-top:6px">+ Add exercise</button>
-      <div class="small muted" style="margin-top:8px">Name and target reps. Drag the ☰ handle to reorder. Changes save automatically.</div>
+      <div class="small muted" style="margin-top:8px">These load into every new session. Name and target reps; drag the ☰ handle to reorder. Changes save automatically.</div>
+    </div>
+
+    <div id="otherExSection" style="display:none">
+      <h2 class="section">Other exercises</h2>
+      <div class="card">
+        <div id="otherExList"></div>
+        <div class="small muted" style="margin-top:8px">Added on the fly during sessions. Tap ⭐ to move one into your defaults.</div>
+      </div>
     </div>
 
     <h2 class="section">Data</h2>
@@ -213,17 +223,19 @@ const STORE_KEY = "gymtracker.v1";
 const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => [...r.querySelectorAll(s)];
 
+const DEFAULT_REPS = "3×8";
 const DEFAULTS = {
   exercises: [
-    { id: uid(), name: "Squat",        reps: "5×5" },
-    { id: uid(), name: "Bench Press",  reps: "5×5" },
-    { id: uid(), name: "Deadlift",     reps: "1×5" },
-    { id: uid(), name: "Overhead Press", reps: "5×5" },
-    { id: uid(), name: "Barbell Row",  reps: "5×5" },
+    { id: uid(), name: "Squat",          reps: DEFAULT_REPS },
+    { id: uid(), name: "Bench Press",    reps: DEFAULT_REPS },
+    { id: uid(), name: "Deadlift",       reps: DEFAULT_REPS },
+    { id: uid(), name: "Overhead Press", reps: DEFAULT_REPS },
+    { id: uid(), name: "Barbell Row",    reps: DEFAULT_REPS },
   ],
+  otherExercises: [], // ad-hoc exercises added during a session, not part of the defaults
   bodyweight: [],   // [{date:"YYYY-MM-DD", kg:Number}]
   sessions: [],     // [{date:"YYYY-MM-DD", ts:Number, weights:{exId:Number}}]
-  active: null,     // {start:Number, weights:{exId:Number}} while a session runs
+  active: null,     // {start:Number, exIds:[...], weights:{exId:Number}} while a session runs
 };
 
 function uid(){ return Math.random().toString(36).slice(2, 9); }
@@ -259,6 +271,18 @@ function lastWeightFor(exId, beforeTs=Infinity){
   return null;
 }
 function lastBodyweight(){ return state.bodyweight.length ? state.bodyweight[state.bodyweight.length-1] : null; }
+function allExercises(){ return state.exercises.concat(state.otherExercises); }
+function findEx(id){ return allExercises().find(e=>e.id===id) || null; }
+function ensureActive(){
+  if (!state.active) return;
+  if (!Array.isArray(state.active.exIds)){
+    // migrate an older active session that predates per-session exercise lists
+    state.active.exIds = state.exercises.map(e=>e.id);
+    Object.keys(state.active.weights||{}).forEach(id=>{
+      if (!state.active.exIds.includes(id)) state.active.exIds.push(id);
+    });
+  }
+}
 
 /* ============================================================
    NAVIGATION
@@ -286,19 +310,26 @@ $$("nav button").forEach(b=> b.addEventListener("click", ()=>go(b.dataset.page))
    WORKOUT PAGE
    ============================================================ */
 function renderWorkout(){
+  ensureActive();
   const active = !!state.active;
   $("#sessionBanner").style.display = active ? "block" : "none";
   $("#startWrap").style.display = active ? "none" : "block";
 
   const list = $("#exerciseList");
-  if (!state.exercises.length){
-    list.innerHTML = `<div class="empty">No exercises yet. Add some in Settings.</div>`;
-    return;
-  }
   list.innerHTML = "";
-  state.exercises.forEach(ex=>{
-    const last = lastWeightFor(ex.id);
-    const cur = active ? state.active.weights[ex.id] : null;
+
+  const ids = active ? state.active.exIds : state.exercises.map(e=>e.id);
+  if (!ids.length){
+    list.innerHTML = active
+      ? `<div class="empty">No exercises in this session yet.<br>Add one below. 👇</div>`
+      : `<div class="empty">No default exercises yet.<br>Add some in Settings.</div>`;
+  }
+
+  ids.forEach(id=>{
+    const ex = findEx(id);
+    if (!ex) return;
+    const last = lastWeightFor(id);
+    const cur = active ? state.active.weights[id] : null;
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `
@@ -307,21 +338,35 @@ function renderWorkout(){
           <div class="exName">${escapeHtml(ex.name)}</div>
           <div class="small muted">Target: ${escapeHtml(ex.reps||"—")}</div>
         </div>
-        <span class="pill lastkg">${last!=null ? "last: "+fmtKg(last)+" kg" : "no history"}</span>
+        ${active
+          ? `<button class="iconbtn" title="Remove from this session" data-remove="${id}">✕</button>`
+          : `<span class="pill lastkg">${last!=null ? "last: "+fmtKg(last)+" kg" : "no history"}</span>`}
       </div>
-      <div class="row" style="gap:12px; justify-content:flex-end">
-        <div class="grow small muted">${active ? "This session:" : "Start a session to log"}</div>
+      <div class="row" style="gap:12px; justify-content:flex-end; align-items:flex-start">
+        <div class="grow small muted">${active ? (last!=null ? "Last: "+fmtKg(last)+" kg" : "No history yet") : "Start a session to log"}</div>
         <div class="kgWrap">
           <input class="kgInput" type="number" inputmode="decimal" step="0.5"
                  placeholder="${last!=null?fmtKg(last):"–"}" ${active?"":"disabled"}
-                 value="${cur!=null?cur:""}" data-ex="${ex.id}">
+                 value="${cur!=null?cur:""}" data-ex="${id}">
           <span class="unit">kg</span>
-          <div class="delta" data-delta="${ex.id}"></div>
+          <div class="delta" data-delta="${id}"></div>
         </div>
       </div>`;
     list.appendChild(card);
-    updateDelta(ex.id, cur, last);
+    updateDelta(id, cur, last);
   });
+
+  if (active){
+    const addCard = document.createElement("div");
+    addCard.className = "card";
+    addCard.style.background = "transparent";
+    addCard.style.borderStyle = "dashed";
+    addCard.innerHTML = `
+      <button class="ghost wide sm" id="btnAddToSession">+ Add exercise to session</button>
+      <div id="addPanel" style="display:none; margin-top:12px"></div>`;
+    list.appendChild(addCard);
+    $("#btnAddToSession").addEventListener("click", toggleAddPanel);
+  }
 
   list.querySelectorAll("input.kgInput").forEach(inp=>{
     inp.addEventListener("input", ()=>{
@@ -334,6 +379,55 @@ function renderWorkout(){
       updateDelta(id, v, lastWeightFor(id));
     });
   });
+  list.querySelectorAll("[data-remove]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const id = b.dataset.remove;
+      state.active.exIds = state.active.exIds.filter(x=>x!==id);
+      delete state.active.weights[id];
+      save(); renderWorkout();
+    });
+  });
+}
+
+function toggleAddPanel(){
+  const panel = $("#addPanel");
+  if (!panel) return;
+  if (panel.style.display !== "none"){ panel.style.display="none"; return; }
+  panel.style.display="block";
+  const inSession = new Set(state.active.exIds);
+  const avail = allExercises().filter(e=>!inSession.has(e.id));
+  let html = "";
+  if (avail.length){
+    html += `<div class="small muted" style="margin-bottom:6px">Add an existing exercise:</div><div class="tabs" style="margin-bottom:14px">`;
+    avail.forEach(e=> html += `<button class="tab" data-add="${e.id}">${escapeHtml(e.name)}</button>`);
+    html += `</div>`;
+  }
+  html += `<div class="small muted" style="margin-bottom:6px">Or add a new one:</div>
+    <div class="row" style="gap:8px">
+      <input type="text" id="newExName" class="grow" placeholder="Exercise name">
+      <button class="sm" id="btnCreateEx">Add</button>
+    </div>
+    <div class="small muted" style="margin-top:6px">New exercises are saved under “Other exercises” in Settings (reps default ${DEFAULT_REPS}).</div>`;
+  panel.innerHTML = html;
+  panel.querySelectorAll("[data-add]").forEach(b=>
+    b.addEventListener("click", ()=> addExerciseToSession(b.dataset.add)));
+  $("#btnCreateEx").addEventListener("click", ()=>{
+    const name = $("#newExName").value.trim();
+    if (!name){ toast("Enter a name"); return; }
+    const ex = { id:uid(), name, reps:DEFAULT_REPS };
+    state.otherExercises.push(ex);
+    addExerciseToSession(ex.id);
+  });
+  const inp = $("#newExName");
+  if (inp) inp.addEventListener("keydown", e=>{ if(e.key==="Enter") $("#btnCreateEx").click(); });
+}
+
+function addExerciseToSession(id){
+  if (!state.active.exIds.includes(id)) state.active.exIds.push(id);
+  const l = lastWeightFor(id);
+  if (l!=null && state.active.weights[id]==null) state.active.weights[id]=l;
+  save(); renderWorkout();
+  toast("Added to session");
 }
 
 function updateDelta(exId, cur, last){
@@ -365,7 +459,7 @@ function startTimer(){
 }
 
 $("#btnStartSession").addEventListener("click", ()=>{
-  state.active = { start: Date.now(), weights: {} };
+  state.active = { start: Date.now(), exIds: state.exercises.map(e=>e.id), weights: {} };
   // prefill with last known weights so you only change what differs
   state.exercises.forEach(ex=>{
     const l = lastWeightFor(ex.id);
@@ -410,6 +504,35 @@ function renderSettings(){
 
   // exercises
   renderExEdit();
+  renderOtherEx();
+}
+
+function renderOtherEx(){
+  const sec=$("#otherExSection"), wrap=$("#otherExList");
+  if (!state.otherExercises.length){ sec.style.display="none"; return; }
+  sec.style.display="block"; wrap.innerHTML="";
+  state.otherExercises.forEach((ex,i)=>{
+    const row=document.createElement("div");
+    row.className="ex-edit-row";
+    row.innerHTML=`
+      <span class="drag" style="color:var(--good); cursor:pointer; font-size:16px" title="Move to defaults" data-promote="${i}">⭐</span>
+      <input class="name" type="text" value="${escapeHtml(ex.name)}" placeholder="Exercise" data-of="name" data-i="${i}">
+      <input class="reps" type="text" value="${escapeHtml(ex.reps||"")}" placeholder="reps" data-of="reps" data-i="${i}">
+      <span class="drag" style="color:var(--bad)" data-odel="${i}">✕</span>`;
+    wrap.appendChild(row);
+  });
+  wrap.querySelectorAll("input").forEach(inp=> inp.addEventListener("input", ()=>{
+    state.otherExercises[+inp.dataset.i][inp.dataset.of]=inp.value; save();
+  }));
+  wrap.querySelectorAll("[data-promote]").forEach(x=> x.addEventListener("click", ()=>{
+    const [m]=state.otherExercises.splice(+x.dataset.promote,1);
+    state.exercises.push(m); save(); renderSettings();
+    toast(`${m.name} added to defaults`);
+  }));
+  wrap.querySelectorAll("[data-odel]").forEach(x=> x.addEventListener("click", ()=>{
+    if (!confirm("Remove this exercise? Past logged data is kept.")) return;
+    state.otherExercises.splice(+x.dataset.odel,1); save(); renderSettings();
+  }));
 }
 
 $("#btnLogBw").addEventListener("click", ()=>{
@@ -460,7 +583,7 @@ function addDragHandlers(row){
 }
 
 $("#btnAddEx").addEventListener("click", ()=>{
-  state.exercises.push({id:uid(), name:"New Exercise", reps:"3×8"});
+  state.exercises.push({id:uid(), name:"New Exercise", reps:DEFAULT_REPS});
   save(); renderExEdit();
 });
 
@@ -523,7 +646,7 @@ function renderInsights(){
     return b;
   };
   tabs.appendChild(mk("__total__","Total / session"));
-  state.exercises.forEach(ex=> tabs.appendChild(mk(ex.id, ex.name)));
+  allExercises().forEach(ex=> tabs.appendChild(mk(ex.id, ex.name)));
 
   renderProgressChart();
 }
@@ -551,7 +674,7 @@ function renderProgressChart(){
     const d=+(last-first).toFixed(1);
     setStat(2, (d>0?"+":"")+fmtKg(d)+"kg", "since start");
   } else {
-    const ex = state.exercises.find(e=>e.id===progSel);
+    const ex = findEx(progSel);
     const pts = sessions.filter(s=>s.weights[progSel]!=null)
                         .map(s=>({x:s.ts, y:s.weights[progSel]}));
     $("#progLabel").textContent = ex ? `${ex.name} — weight per session` : "";
